@@ -1,103 +1,111 @@
 # tabml
 
-**Train, evaluate, and serve a model from any CSV — in one command.**
+**From a raw CSV to an audited, trained, explained, and served model — in four commands.**
 
 `tabml` is a small, no-config command-line tool for tabular machine learning.
-Point it at a CSV and a target column; it detects whether the problem is
-classification or regression, builds a clean preprocessing pipeline, compares
-several models with cross-validation, prints a readable report, and saves a
-portable model you can predict with later.
+It does the boring-but-easy-to-get-wrong parts correctly: it **audits your data
+for target leakage** before you trust a single score, builds a clean
+preprocessing pipeline, compares several models with cross-validation, explains
+what drove the result, and can **serve the model as a REST API**.
 
 ```bash
-$ tabml train passengers.csv --target survived
-────────────────────────────────────────────────────────
-  tabml · CLASSIFICATION  —  target: survived
-────────────────────────────────────────────────────────
-  rows: 300   features: 4   trained in 0.7s
-
-  Model comparison (f1_weighted, 3 models, CV):
-   ► logistic_regression   0.7030  ████████████████
-     gradient_boosting     0.6282  ███████████████
-     random_forest         0.6277  ███████████████
-
-  Best model: logistic_regression
-  Held-out test metrics:
-    accuracy       0.55
-    f1_weighted    0.5534
-    roc_auc        0.5891
-────────────────────────────────────────────────────────
-  ✓ model saved → model.joblib
+tabml audit data.csv --target churn     # catch leakage & data issues first
+tabml train data.csv --target churn     # compare models, explain, save
+tabml serve model.joblib                # instant FastAPI prediction endpoint
+tabml predict new.csv -m model.joblib   # batch-score new rows
 ```
 
-## Why
+## Why it exists
 
-Most "quick ML" still means boilerplate: read the CSV, guess the task, impute,
-scale, encode, split, try a few models, score them, pick one, persist it.
-`tabml` does exactly that — correctly and reproducibly — so a baseline is one
-command instead of a notebook.
+Most "quick ML" skips the two things that actually bite you:
+
+1. **Target leakage** — a feature that secretly encodes the answer. Your offline
+   score looks amazing and then collapses in production. `tabml audit` fits a
+   tiny single-feature model per column and flags any feature that predicts the
+   target almost perfectly *on its own*:
+
+   ```
+   $ tabml audit transactions.csv --target fraud
+   ⛔ TARGET LEAKAGE SUSPECTS — investigate before trusting any score:
+        settlement_status: predicts 'fraud' almost perfectly alone (AUC 0.998) — likely target leakage
+   ⚠ WARN  customer_id: unique per row — looks like an ID; drop before training
+   ```
+   (`audit` exits non-zero when it finds leakage, so it drops straight into CI.)
+
+2. **Serving** — a trained model is useless in a notebook. `tabml serve` turns a
+   saved artifact into a live FastAPI service with `/predict`, `/schema`, and
+   `/health` — no glue code.
+
+Everything in between (impute → encode → compare → cross-validate → evaluate →
+explain → persist) is done for you, reproducibly.
 
 ## Install
 
 ```bash
-pip install -e .          # from a clone
-# or
-pip install -r requirements.txt
+pip install -e .                # core (audit, train, predict)
+pip install -e ".[serve]"       # + FastAPI serving
 ```
 
-Requires Python 3.9+. Dependencies: pandas, numpy, scikit-learn, joblib.
+Python 3.9+. Core deps: pandas, numpy, scikit-learn, joblib.
 
-## Usage
+## Commands
 
-**Train** — auto-detects classification vs regression from the target:
-
+### `audit` — pre-flight data check
 ```bash
-tabml train data.csv --target price            # regression
-tabml train data.csv --target churn -o churn.joblib --cv 10
+tabml audit data.csv --target y
 ```
+Flags **target leakage**, ID-like and constant columns, high missingness,
+class imbalance, and high-cardinality categoricals.
 
-**Predict** — apply a saved model to new rows:
-
+### `train` — compare, explain, save
 ```bash
-tabml predict new.csv --model churn.joblib --out scored.csv
+tabml train data.csv --target y --card model_card.md
+```
+Auto-detects classification vs regression, compares three baselines by
+cross-validated `f1_weighted` / `r2`, evaluates the winner on a held-out split,
+prints **top feature importances**, and (optionally) writes a markdown
+**model card**.
+
+### `serve` — REST API from a model
+```bash
+tabml serve model.joblib --port 8000
+# POST /predict  {"records": [{...}]}  ->  {"predictions": [...]}
 ```
 
-For classification, predictions include a `confidence` column (max class
-probability); for regression, a numeric `prediction`.
+### `predict` — batch scoring
+```bash
+tabml predict new.csv --model model.joblib --out scored.csv
+```
 
-## What it does under the hood
+## Under the hood
 
-1. **Task detection** — non-numeric or low-cardinality integer targets →
-   classification; continuous targets → regression.
-2. **Preprocessing** (`ColumnTransformer`): median-impute + standardize numeric
-   columns; most-frequent-impute + one-hot encode categoricals
-   (`handle_unknown="ignore"`, so unseen categories at predict time are safe).
-3. **Model comparison** — three sensible baselines per task
-   (linear/logistic, random forest, gradient boosting), ranked by
-   cross-validated `f1_weighted` (classification) or `r2` (regression).
-4. **Evaluation** — the winner is refit and scored on a held-out test split:
-   accuracy / weighted-F1 / ROC-AUC, or R² / MAE / RMSE.
-5. **Persistence** — the full fitted pipeline plus metadata is saved as a single
-   `joblib` artifact, so `predict` needs nothing but the file.
+- **Leakage scan** — per feature, a depth-limited tree is cross-validated using
+  *only that feature*; a near-perfect score (≥ 0.985 AUC/accuracy/R²) is flagged.
+- **Preprocessing** (`ColumnTransformer`) — median-impute + standardize numeric;
+  most-frequent-impute + one-hot encode categoricals (`handle_unknown="ignore"`).
+- **Model comparison** — logistic/linear, random forest, gradient boosting,
+  ranked by CV; the winner is refit and scored on a held-out test split.
+- **Explainability** — tree importances or linear coefficients mapped back onto
+  the expanded feature names.
+- **Persistence** — the full fitted pipeline + metadata in one portable
+  `joblib` file; `serve`/`predict` need nothing else.
 
 ## Library API
 
 ```python
-from tabml import core
-import pandas as pd
+from tabml import core, audit
 
-df = pd.read_csv("data.csv")
-result = core.train(df, target="label")
-print(result.best_model, result.test_metrics)
+issues = audit.audit(df, target="label")     # -> AuditResult (leaks, warnings)
+result = core.train(df, target="label")        # -> TrainResult (metrics, importances)
 core.save(result, "model.joblib")
-
-preds = core.predict("model.joblib", df.drop(columns=["label"]))
+preds = core.predict("model.joblib", new_df)
 ```
 
 ## Develop
 
 ```bash
 pip install -e ".[dev]"
-pytest -q                 # 9 tests
+pytest -q                 # 18 tests (core, audit, serving)
 ```
 
 ## License

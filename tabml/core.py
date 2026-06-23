@@ -103,6 +103,7 @@ class TrainResult:
     n_features: int
     feature_names: list[str]
     class_labels: Optional[list] = None
+    importances: list = field(default_factory=list)
     elapsed_s: float = 0.0
     pipeline: Any = field(default=None, repr=False)
 
@@ -160,9 +161,35 @@ def train(
         n_features=X.shape[1],
         feature_names=X.columns.tolist(),
         class_labels=class_labels,
+        importances=feature_importances(best_pipe),
         elapsed_s=round(time.time() - t0, 2),
         pipeline=best_pipe,
     )
+
+
+def feature_importances(pipe: Pipeline, top: int = 15) -> list[tuple[str, float]]:
+    """Top normalized feature importances from the fitted pipeline.
+
+    Uses tree ``feature_importances_`` or linear ``coef_`` magnitude, mapped
+    back onto the expanded (post-encoding) feature names.
+    """
+    pre = pipe.named_steps.get("pre")
+    model = pipe.named_steps.get("model")
+    try:
+        names = list(pre.get_feature_names_out())
+    except Exception:
+        return []
+    imp = None
+    if hasattr(model, "feature_importances_"):
+        imp = np.abs(np.asarray(model.feature_importances_, dtype=float))
+    elif hasattr(model, "coef_"):
+        coef = np.asarray(model.coef_, dtype=float)
+        imp = np.abs(coef).mean(axis=0) if coef.ndim > 1 else np.abs(coef)
+    if imp is None or len(imp) != len(names):
+        return []
+    total = float(imp.sum()) or 1.0
+    order = np.argsort(imp)[::-1][:top]
+    return [(names[i], round(float(imp[i] / total), 4)) for i in order]
 
 
 def evaluate(pipe: Pipeline, X, y, task: str) -> dict[str, float]:

@@ -1,3 +1,3 @@
-"""tabml — train, evaluate, and serve a model from any CSV in one command."""
+"""tabml — audit, train, explain, and serve a model from any CSV."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
