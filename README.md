@@ -66,11 +66,14 @@ cross-validated `f1_weighted` / `r2`, evaluates the winner on a held-out split,
 prints **top feature importances**, and (optionally) writes a markdown
 **model card**.
 
-### `serve` — REST API from a model
+### `serve` — REST API + web dashboard from a model
 ```bash
 tabml serve model.joblib --port 8000
-# POST /predict  {"records": [{...}]}  ->  {"predictions": [...]}
 ```
+- **`GET /`** — a built-in web UI: the model card (metrics + top features) and a
+  live prediction form, no frontend build required.
+- **`POST /predict`** — `{"records": [{...}]}` → `{"predictions": [...]}`
+- **`GET /schema`**, **`GET /health`**, **`GET /docs`** (OpenAPI)
 
 ### `predict` — batch scoring
 ```bash

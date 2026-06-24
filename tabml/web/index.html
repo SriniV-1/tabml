@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>tabml · model server</title>
+<style>
+  :root {
+    --bg:#0d1117; --panel:#161b22; --line:#27303b; --ink:#e6edf3;
+    --dim:#8b949e; --acc:#3fb950; --acc2:#58a6ff; --warn:#d29922; --bad:#f85149;
+    --mono:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font-family:var(--mono);font-size:14px;line-height:1.5;
+       background-image:radial-gradient(circle at 20% -10%,rgba(63,185,80,.08),transparent 40%),
+                        radial-gradient(circle at 100% 0,rgba(88,166,255,.06),transparent 40%);min-height:100vh}
+  .wrap{max-width:1080px;margin:0 auto;padding:28px 22px 60px}
+  header{display:flex;align-items:baseline;gap:14px;border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:26px}
+  .logo{font-size:1.5rem;font-weight:700;letter-spacing:-.02em}
+  .logo b{color:var(--acc)}
+  .sub{color:var(--dim);font-size:.8rem}
+  .badge{margin-left:auto;font-size:.72rem;text-transform:uppercase;letter-spacing:.1em;
+         border:1px solid var(--acc);color:var(--acc);padding:4px 10px;border-radius:4px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  @media(max-width:820px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px}
+  .card h2{font-size:.74rem;text-transform:uppercase;letter-spacing:.12em;color:var(--dim);margin-bottom:14px}
+  .kv{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px dashed var(--line)}
+  .kv:last-child{border-bottom:0}
+  .kv span:first-child{color:var(--dim)}
+  .kv b{font-weight:600}
+  .metric{color:var(--acc)}
+  .imp-row{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;margin:7px 0}
+  .imp-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.82rem}
+  .imp-bar{grid-column:1/3;height:5px;background:#0d1117;border-radius:3px;overflow:hidden}
+  .imp-bar i{display:block;height:100%;background:linear-gradient(90deg,var(--acc2),var(--acc))}
+  form{display:flex;flex-direction:column;gap:11px}
+  .field{display:flex;flex-direction:column;gap:4px}
+  .field label{font-size:.72rem;color:var(--dim)}
+  .field input{background:#0d1117;border:1px solid var(--line);color:var(--ink);
+               font-family:var(--mono);font-size:.86rem;padding:8px 10px;border-radius:6px;outline:none}
+  .field input:focus{border-color:var(--acc2)}
+  .actions{display:flex;gap:10px;margin-top:6px}
+  button{background:var(--acc);color:#08160c;border:0;font-family:var(--mono);font-weight:700;
+         font-size:.85rem;padding:10px 18px;border-radius:6px;cursor:pointer}
+  button.ghost{background:transparent;color:var(--dim);border:1px solid var(--line)}
+  button:active{transform:translateY(1px)}
+  .result{margin-top:16px;border:1px solid var(--line);border-radius:8px;padding:16px;display:none}
+  .result.show{display:block;animation:fade .25s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1}}
+  .pred{font-size:2rem;font-weight:700;color:var(--acc)}
+  .conf{color:var(--dim);font-size:.82rem;margin-top:4px}
+  .err{color:var(--bad);font-size:.82rem;margin-top:10px}
+  code{color:var(--acc2)}
+  footer{margin-top:30px;color:var(--dim);font-size:.72rem;text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <div class="logo"><b>tab</b>ml</div>
+      <div class="sub">model server</div>
+    </div>
+    <div class="badge" id="task-badge">…</div>
+  </header>
+
+  <div class="grid">
+    <!-- Model card -->
+    <section class="card">
+      <h2>Model card</h2>
+      <div id="card-kv"></div>
+      <h2 style="margin-top:22px">Top features</h2>
+      <div id="importances"><span class="sub">—</span></div>
+    </section>
+
+    <!-- Live prediction -->
+    <section class="card">
+      <h2>Live prediction</h2>
+      <form id="predict-form"></form>
+      <div class="actions" style="margin-top:14px">
+        <button id="predict-btn" type="submit" form="predict-form">Predict</button>
+        <button class="ghost" id="sample-btn" type="button">Clear</button>
+      </div>
+      <div class="result" id="result">
+        <div class="sub">prediction</div>
+        <div class="pred" id="pred-val">—</div>
+        <div class="conf" id="pred-conf"></div>
+      </div>
+      <div class="err" id="err"></div>
+    </section>
+  </div>
+
+  <footer>
+    served by <code>tabml serve</code> ·
+    <a href="/docs" style="color:var(--acc2)">/docs</a> ·
+    <a href="https://github.com/SriniV-1/tabml" style="color:var(--acc2)">github.com/SriniV-1/tabml</a>
+  </footer>
+</div>
+
+<script>
+let SCHEMA = null;
+
+async function load() {
+  const r = await fetch("/schema");
+  SCHEMA = await r.json();
+  document.getElementById("task-badge").textContent = SCHEMA.task;
+
+  // model card
+  const kv = document.getElementById("card-kv");
+  const rows = [
+    ["target", SCHEMA.target],
+    ["best model", SCHEMA.best_model],
+    ["features", (SCHEMA.features || []).length],
+  ];
+  for (const [k, v] of Object.entries(SCHEMA.test_metrics || {})) {
+    rows.push([k, `<b class="metric">${v}</b>`]);
+  }
+  kv.innerHTML = rows.map(([k, v]) =>
+    `<div class="kv"><span>${k}</span><b>${v}</b></div>`).join("");
+
+  // importances
+  const imp = SCHEMA.importances || [];
+  if (imp.length) {
+    const mx = Math.max(...imp.map(([, v]) => v)) || 1;
+    document.getElementById("importances").innerHTML = imp.slice(0, 8).map(([name, v]) => `
+      <div class="imp-row"><span class="imp-name">${name}</span><span class="metric">${v.toFixed(3)}</span>
+      <div class="imp-bar"><i style="width:${(v / mx) * 100}%"></i></div></div>`).join("");
+  }
+
+  // prediction form — one input per feature
+  document.getElementById("predict-form").innerHTML = (SCHEMA.features || []).map(f => `
+    <div class="field"><label>${f}</label><input name="${f}" autocomplete="off" /></div>`).join("");
+}
+
+function coerce(v) {
+  if (v === "") return null;
+  const n = Number(v);
+  return Number.isNaN(n) ? v : n;
+}
+
+document.getElementById("predict-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const err = document.getElementById("err"); err.textContent = "";
+  const record = {};
+  new FormData(e.target).forEach((v, k) => { record[k] = coerce(v); });
+  try {
+    const r = await fetch("/predict", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ records: [record] }),
+    });
+    const data = await r.json();
+    if (!r.ok) { err.textContent = data.detail || "prediction failed"; return; }
+    const p = data.predictions[0];
+    document.getElementById("pred-val").textContent = p.prediction;
+    document.getElementById("pred-conf").textContent =
+      p.confidence != null ? `confidence ${(p.confidence * 100).toFixed(1)}%` : "";
+    document.getElementById("result").classList.add("show");
+  } catch (e) { err.textContent = "network error"; }
+});
+
+document.getElementById("sample-btn").addEventListener("click", () => {
+  document.getElementById("predict-form").reset();
+  document.getElementById("result").classList.remove("show");
+});
+
+load();
+</script>
+</body>
+</html>

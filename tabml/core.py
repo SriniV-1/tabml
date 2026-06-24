@@ -226,7 +226,11 @@ def save(result: TrainResult, path: str | Path) -> None:
         "feature_names": result.feature_names,
         "class_labels": result.class_labels,
         "best_model": result.best_model,
-        "version": 1,
+        "test_metrics": result.test_metrics,
+        "cv_metric": result.cv_metric,
+        "cv_scores": result.cv_scores,
+        "importances": result.importances,
+        "version": 2,
     }
     joblib.dump(payload, path)
 

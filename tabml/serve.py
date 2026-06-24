@@ -20,6 +20,7 @@ def build_app(model_path: str | Path):
     """Build a FastAPI app that serves predictions from a saved model."""
     try:
         from fastapi import FastAPI, HTTPException
+        from fastapi.responses import FileResponse
     except ImportError as e:  # pragma: no cover
         raise RuntimeError(
             "serving needs FastAPI — install with: pip install 'tabml[serve]'"
@@ -28,6 +29,7 @@ def build_app(model_path: str | Path):
     payload = core.load(model_path)
     features = payload["feature_names"]
     task = payload["task"]
+    web_dir = Path(__file__).resolve().parent / "web"
 
     app = FastAPI(
         title="tabml model server",
@@ -47,7 +49,18 @@ def build_app(model_path: str | Path):
             "features": features,
             "best_model": payload.get("best_model"),
             "class_labels": payload.get("class_labels"),
+            "test_metrics": payload.get("test_metrics", {}),
+            "cv_metric": payload.get("cv_metric"),
+            "cv_scores": payload.get("cv_scores", {}),
+            "importances": payload.get("importances", []),
         }
+
+    @app.get("/")
+    def index():
+        page = web_dir / "index.html"
+        if page.exists():
+            return FileResponse(page)
+        return {"service": "tabml", "docs": "/docs", "schema": "/schema"}
 
     @app.post("/predict")
     def predict(body: dict) -> dict[str, Any]:

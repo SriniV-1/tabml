@@ -27,3 +27,6 @@ tabml = "tabml.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["tabml*"]
+
+[tool.setuptools.package-data]
+tabml = ["web/*.html"]
